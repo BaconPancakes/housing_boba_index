@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Housing Boba Index</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..800;1,9..40,300..800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <aside id="sidebar">
+    <header class="sidebar-header">
+      <div class="logo-row">
+        <span class="logo-bubble">🧋</span>
+        <h1>Housing<br>Boba Index</h1>
+      </div>
+      <p class="tagline">Find your home near the best boba.</p>
+      {% if demo_mode %}
+      <div class="demo-badge">DEMO MODE — no API keys configured</div>
+      {% endif %}
+    </header>
+
+    <form id="search-form" autocomplete="off">
+      <div class="input-group">
+        <input type="text" id="address-input" placeholder="Enter an address…" aria-label="Address">
+        <button type="submit" id="search-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
+      </div>
+      <p class="hint">Try: <button type="button" class="quick-link" data-addr="159 S Murphy Ave, Sunnyvale, CA">Sunnyvale</button> · <button type="button" class="quick-link" data-addr="19620 Vallco Pkwy, Cupertino, CA">Cupertino</button> · <button type="button" class="quick-link" data-addr="92 S 1st St, San Jose, CA">San Jose</button> · <button type="button" class="quick-link" data-addr="388 9th St, Oakland, CA">Oakland</button></p>
+    </form>
+
+    <div id="result-panel" class="hidden">
+      <div class="score-card">
+        <div class="score-ring-wrap">
+          <svg class="score-ring" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="52"/>
+            <circle class="ring-fg" cx="60" cy="60" r="52" id="score-arc"/>
+          </svg>
+          <div class="score-value" id="score-value">—</div>
+        </div>
+        <div class="score-meta">
+          <span class="grade-badge" id="grade-badge">—</span>
+          <span class="score-label">Boba Index</span>
+        </div>
+      </div>
+
+      <p class="summary-text" id="summary-text"></p>
+
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-num" id="stat-shops">0</span><span class="stat-label">Shops</span></div>
+        <div class="stat"><span class="stat-num" id="stat-premium">0</span><span class="stat-label">Premium</span></div>
+        <div class="stat"><span class="stat-num" id="stat-closest">—</span><span class="stat-label">Closest (mi)</span></div>
+        <div class="stat"><span class="stat-num" id="stat-avg-rating">—</span><span class="stat-label">Avg Rating</span></div>
+      </div>
+
+      <div id="price-card" class="price-card hidden">
+        <div class="price-main">
+          <span class="price-value" id="price-value">—</span>
+          <span class="price-label">median home price</span>
+        </div>
+        <div class="price-detail">
+          <span id="price-sqft">—</span>/sqft · <span id="price-zip">—</span>
+        </div>
+      </div>
+
+      <div id="correlation-section" class="correlation-section">
+        <h3 class="section-title correlation-toggle" id="correlation-toggle">Price Correlation ▸</h3>
+        <div id="correlation-chart-wrap" class="correlation-chart-wrap hidden">
+          <canvas id="correlation-chart"></canvas>
+        </div>
+      </div>
+
+      <h3 class="section-title" id="shops-heading">Nearby Shops</h3>
+      <ul id="shop-list" class="shop-list"></ul>
+    </div>
+
+    <div id="loading-panel" class="hidden">
+      <div class="loader"></div>
+      <p>Calculating Boba Index…</p>
+    </div>
+
+    <div id="error-panel" class="hidden">
+      <p class="error-msg" id="error-msg"></p>
+    </div>
+
+    <footer class="sidebar-footer">
+      <p>Google Places · Redfin · Scoring v1.0</p>
+    </footer>
+  </aside>
+
+  <main id="map"></main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

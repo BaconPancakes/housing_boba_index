@@ -1,0 +1,8 @@
+.venv/
+.ruff_cache/
+__pycache__/
+*.pyc
+.env
+cache.db
+cache.db-wal
+cache.db-shm

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f0a040"/>
+      <stop offset="100%" stop-color="#e07820"/>
+    </linearGradient>
+  </defs>
+  <!-- Cup body -->
+  <path d="M8 10 L7 27 Q7 30 10 30 L22 30 Q25 30 25 27 L24 10 Z" fill="url(#g)" stroke="#c06010" stroke-width="0.5"/>
+  <!-- Lid -->
+  <rect x="6" y="8" width="20" height="3" rx="1.5" fill="#d4d4d8" stroke="#a1a1aa" stroke-width="0.5"/>
+  <!-- Dome top -->
+  <path d="M9 8 Q16 2 23 8" fill="#e4e4e7" stroke="#a1a1aa" stroke-width="0.5"/>
+  <!-- Straw -->
+  <rect x="18" y="1" width="2" height="14" rx="1" fill="#34d399" transform="rotate(8 19 8)"/>
+  <!-- Boba pearls -->
+  <circle cx="12" cy="24" r="2" fill="#1c1917" opacity="0.8"/>
+  <circle cx="16" cy="26" r="2" fill="#1c1917" opacity="0.8"/>
+  <circle cx="20" cy="24" r="2" fill="#1c1917" opacity="0.8"/>
+  <circle cx="14" cy="22" r="1.5" fill="#1c1917" opacity="0.6"/>
+  <circle cx="18" cy="22" r="1.5" fill="#1c1917" opacity="0.6"/>
+</svg>
