@@ -288,6 +288,53 @@
   }
 
   // ---- Correlation chart ----
+  var GRADE_BANDS = [
+    { min: 0,    max: 0.30, grade: "F", color: GRADE_COLORS.F },
+    { min: 0.30, max: 0.50, grade: "D", color: GRADE_COLORS.D },
+    { min: 0.50, max: 0.65, grade: "C", color: GRADE_COLORS.C },
+    { min: 0.65, max: 0.80, grade: "B", color: GRADE_COLORS.B },
+    { min: 0.80, max: 0.90, grade: "A", color: GRADE_COLORS.A },
+    { min: 0.90, max: 1.00, grade: "S", color: GRADE_COLORS.S },
+  ];
+
+  var gradeBandsPlugin = {
+    id: "gradeBands",
+    beforeDraw: function (chart) {
+      var ctx = chart.ctx;
+      var xScale = chart.scales.x;
+      var yScale = chart.scales.y;
+      var top = yScale.top;
+      var bottom = yScale.bottom;
+
+      GRADE_BANDS.forEach(function (band) {
+        var x0 = xScale.getPixelForValue(band.min);
+        var x1 = xScale.getPixelForValue(band.max);
+        ctx.save();
+        ctx.fillStyle = band.color + "18";
+        ctx.fillRect(x0, top, x1 - x0, bottom - top);
+
+        ctx.fillStyle = band.color + "90";
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(band.grade, (x0 + x1) / 2, top + 4);
+        ctx.restore();
+      });
+
+      [0.30, 0.50, 0.65, 0.80, 0.90].forEach(function (val) {
+        var x = xScale.getPixelForValue(val);
+        ctx.save();
+        ctx.strokeStyle = "rgba(139,143,163,0.25)";
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bottom);
+        ctx.stroke();
+        ctx.restore();
+      });
+    },
+  };
+
   function corrDatasets(data, current) {
     var points = data
       .filter(function (d) { return d.median_price !== null; })
@@ -297,10 +344,10 @@
     var ds = [{
       label: "Bay Area Neighborhoods",
       data: points,
-      backgroundColor: points.map(function (p) { return (GRADE_COLORS[p.grade] || "#60a5fa") + "B3"; }),
-      borderColor: points.map(function (p) { return GRADE_COLORS[p.grade] || "#60a5fa"; }),
-      pointRadius: 6,
-      pointHoverRadius: 9,
+      backgroundColor: "rgba(200, 210, 230, 0.7)",
+      borderColor: "rgba(200, 210, 230, 0.9)",
+      pointRadius: 5,
+      pointHoverRadius: 8,
     }];
     if (current && current.median_price !== null) {
       ds.push({
@@ -334,7 +381,7 @@
             label: function (ctx) {
               var pt = ctx.raw;
               var zip = pt.zip ? " (" + pt.zip + ")" : "";
-              return pt.label + zip + ": Index " + pt.x.toFixed(2) + " / $" + (pt.y / 1e6).toFixed(1) + "M";
+              return pt.label + zip + ": Index " + pt.x.toFixed(2) + " (" + pt.grade + ") / $" + (pt.y / 1e6).toFixed(1) + "M";
             },
           },
         },
@@ -376,6 +423,7 @@
       type: "scatter",
       data: { datasets: ds },
       options: corrChartOptions(searchFromPoint),
+      plugins: [gradeBandsPlugin],
     });
   }
 
@@ -391,6 +439,7 @@
       type: "scatter",
       data: { datasets: ds },
       options: corrChartOptions(searchFromPoint),
+      plugins: [gradeBandsPlugin],
     });
   }
 
