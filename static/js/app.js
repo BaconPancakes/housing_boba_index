@@ -36,11 +36,11 @@
     shopsHead:   document.getElementById("shops-heading"),
     priceCard:   document.getElementById("price-card"),
     priceValue:  document.getElementById("price-value"),
-    priceSqft:   document.getElementById("price-sqft"),
     priceZip:    document.getElementById("price-zip"),
     corrToggle:  document.getElementById("correlation-toggle"),
     corrWrap:    document.getElementById("correlation-chart-wrap"),
     corrCanvas:  document.getElementById("correlation-chart"),
+    corrLoading: document.getElementById("corr-loading"),
   };
 
   // ---- Leaflet setup ----
@@ -51,12 +51,19 @@
   var homeMarker = null;
   var radiusCircle = null;
   var shopMarkers = L.layerGroup().addTo(map);
+  var shopMarkerMap = {};
 
   // ---- Correlation state ----
   var correlationData = null;
   var correlationChart = null;
+  var correlationChartFS = null;
   var correlationOpen = false;
+  var correlationLoading = false;
   var currentPoint = null;
+  var corrFSBtn = document.getElementById("corr-fullscreen-btn");
+  var corrOverlay = document.getElementById("corr-overlay");
+  var corrOverlayClose = document.getElementById("corr-overlay-close");
+  var corrCanvasFS = document.getElementById("correlation-chart-fs");
 
   // ---- Icons ----
   function bobaIcon(isPremium) {
@@ -99,11 +106,25 @@
   els.corrToggle.addEventListener("click", function () {
     correlationOpen = !correlationOpen;
     els.corrWrap.classList.toggle("hidden", !correlationOpen);
+    corrFSBtn.classList.toggle("hidden", !correlationOpen);
     els.corrToggle.textContent = correlationOpen ? "Price Correlation \u25BE" : "Price Correlation \u25B8";
-    if (correlationOpen && !correlationData) {
+    if (correlationOpen && !correlationData && !correlationLoading) {
       fetchCorrelation();
     } else if (correlationOpen && correlationData) {
       renderCorrelationChart(correlationData, currentPoint);
+    }
+  });
+
+  corrFSBtn.addEventListener("click", function () {
+    corrOverlay.classList.remove("hidden");
+    if (correlationData) renderFSChart(correlationData, currentPoint);
+  });
+  corrOverlayClose.addEventListener("click", function () {
+    corrOverlay.classList.add("hidden");
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !corrOverlay.classList.contains("hidden")) {
+      corrOverlay.classList.add("hidden");
     }
   });
 
@@ -124,13 +145,23 @@
   }
 
   function fetchCorrelation() {
+    correlationLoading = true;
+    els.corrLoading.classList.remove("hidden");
+    els.corrCanvas.style.display = "none";
+
     fetch("/api/correlation")
       .then(function (r) { return r.json(); })
       .then(function (data) {
         correlationData = data;
+        correlationLoading = false;
+        els.corrLoading.classList.add("hidden");
+        els.corrCanvas.style.display = "";
         renderCorrelationChart(data, currentPoint);
       })
-      .catch(function () {});
+      .catch(function () {
+        correlationLoading = false;
+        els.corrLoading.innerHTML = '<p style="color:#f87171">Failed to load correlation data.</p>';
+      });
   }
 
   // ---- Render score ----
@@ -165,48 +196,18 @@
     if (pe) {
       els.priceCard.classList.remove("hidden");
       els.priceValue.textContent = formatPrice(pe.median_price);
-      els.priceSqft.textContent = "$" + pe.price_per_sqft.toLocaleString();
       els.priceZip.textContent = pe.zip_code + " " + pe.label;
     } else {
       els.priceCard.classList.add("hidden");
     }
 
     currentPoint = { boba_index: data.index, median_price: pe ? pe.median_price : null, label: "You" };
-    if (correlationOpen && correlationData) {
-      renderCorrelationChart(correlationData, currentPoint);
-    }
+    if (correlationOpen && correlationData) renderCorrelationChart(correlationData, currentPoint);
+    if (correlationChartFS && correlationData) renderFSChart(correlationData, currentPoint);
 
-    // Shop list
-    els.shopList.innerHTML = "";
-    (data.shops || []).forEach(function (shop) {
-      var isPremium = !!shop.is_premium;
-      var yelpUrl = yelpSearchUrl(shop.name, shop.address);
-      var li = document.createElement("li");
-      li.className = "shop-item";
-      li.innerHTML =
-        '<div>' +
-          '<div class="shop-name ' + (isPremium ? "shop-brand" : "") + '">' +
-            '<a href="' + yelpUrl + '" target="_blank" rel="noopener" class="shop-link">' +
-              escapeHtml(shop.name) +
-            '</a>' +
-            (isPremium ? ' <span style="font-size:.65rem">\u2605 PREMIUM</span>' : "") +
-          '</div>' +
-          '<div style="font-size:.73rem;color:#8b8fa3;margin-top:2px">' + escapeHtml(shop.address) + '</div>' +
-        '</div>' +
-        '<div class="shop-details">' +
-          '<span class="shop-rating">' + (shop.rating || "?") + '\u2605</span>' +
-          '<span class="shop-dist">' + shop.distance_miles.toFixed(2) + ' mi</span>' +
-        '</div>';
-      li.addEventListener("click", function (e) {
-        if (e.target.tagName === "A") return;
-        map.flyTo([shop.lat, shop.lng], 16, { duration: 0.6 });
-      });
-      els.shopList.appendChild(li);
-    });
-    els.shopsHead.textContent = "Nearby Shops (" + data.shop_count + ")";
-
-    // Map markers
+    // Map markers (build before shop list so we can reference them)
     shopMarkers.clearLayers();
+    shopMarkerMap = {};
     if (homeMarker) map.removeLayer(homeMarker);
     if (radiusCircle) map.removeLayer(radiusCircle);
 
@@ -224,20 +225,54 @@
       dashArray: "6 4",
     }).addTo(map);
 
-    (data.shops || []).forEach(function (shop) {
+    (data.shops || []).forEach(function (shop, i) {
       var isPremium = !!shop.is_premium;
-      var yelpUrl = yelpSearchUrl(shop.name, shop.address);
+      var googleUrl = googleMapsUrl(shop.name, shop.lat, shop.lng);
       var marker = L.marker([shop.lat, shop.lng], { icon: bobaIcon(isPremium) });
       marker.bindPopup(
         '<div class="boba-popup">' +
           (isPremium ? '<div class="pop-brand">\u2605 Premium Brand</div>' : "") +
-          '<strong><a href="' + yelpUrl + '" target="_blank" rel="noopener" style="color:#1e293b;text-decoration:underline">' + escapeHtml(shop.name) + '</a></strong><br>' +
+          '<strong><a href="' + googleUrl + '" target="_blank" rel="noopener" style="color:#1e293b;text-decoration:underline">' + escapeHtml(shop.name) + '</a></strong><br>' +
           '<span class="pop-rating">' + (shop.rating || "?") + '\u2605</span> (' + (shop.review_count || 0) + ' reviews)' +
           '<br><span style="font-size:.78rem;color:#64748b">' + shop.distance_miles.toFixed(2) + ' mi away</span>' +
         '</div>'
       );
       shopMarkers.addLayer(marker);
+      shopMarkerMap[i] = marker;
     });
+
+    // Shop list
+    els.shopList.innerHTML = "";
+    (data.shops || []).forEach(function (shop, i) {
+      var isPremium = !!shop.is_premium;
+      var googleUrl = googleMapsUrl(shop.name, shop.lat, shop.lng);
+      var li = document.createElement("li");
+      li.className = "shop-item";
+      li.innerHTML =
+        '<div>' +
+          '<div class="shop-name ' + (isPremium ? "shop-brand" : "") + '">' +
+            '<a href="' + googleUrl + '" target="_blank" rel="noopener" class="shop-link">' +
+              escapeHtml(shop.name) +
+            '</a>' +
+            (isPremium ? ' <span style="font-size:.65rem">\u2605 PREMIUM</span>' : "") +
+          '</div>' +
+          '<div style="font-size:.73rem;color:#8b8fa3;margin-top:2px">' + escapeHtml(shop.address) + '</div>' +
+        '</div>' +
+        '<div class="shop-details">' +
+          '<span class="shop-rating">' + (shop.rating || "?") + '\u2605</span>' +
+          '<span class="shop-dist">' + shop.distance_miles.toFixed(2) + ' mi</span>' +
+        '</div>';
+      li.addEventListener("click", function (e) {
+        if (e.target.tagName === "A") return;
+        var marker = shopMarkerMap[i];
+        if (marker) {
+          map.flyTo([shop.lat, shop.lng], 16, { duration: 0.6 });
+          setTimeout(function () { marker.openPopup(); }, 650);
+        }
+      });
+      els.shopList.appendChild(li);
+    });
+    els.shopsHead.textContent = "Nearby Shops (" + data.shop_count + ")";
 
     var allLats = [data.lat].concat((data.shops || []).map(function (s) { return s.lat; }));
     var allLngs = [data.lng].concat((data.shops || []).map(function (s) { return s.lng; }));
@@ -253,76 +288,109 @@
   }
 
   // ---- Correlation chart ----
-  function renderCorrelationChart(data, current) {
-    if (!data || !data.length) return;
-
+  function corrDatasets(data, current) {
     var points = data
       .filter(function (d) { return d.median_price !== null; })
       .map(function (d) {
-        return { x: d.boba_index, y: d.median_price, label: d.label };
+        return { x: d.boba_index, y: d.median_price, label: d.label, lat: d.lat, lng: d.lng, zip: d.zip_code, grade: d.grade };
       });
-
-    var datasets = [{
+    var ds = [{
       label: "Bay Area Neighborhoods",
       data: points,
-      backgroundColor: "rgba(96, 165, 250, 0.7)",
-      borderColor: "rgba(96, 165, 250, 1)",
+      backgroundColor: points.map(function (p) { return (GRADE_COLORS[p.grade] || "#60a5fa") + "B3"; }),
+      borderColor: points.map(function (p) { return GRADE_COLORS[p.grade] || "#60a5fa"; }),
       pointRadius: 6,
-      pointHoverRadius: 8,
+      pointHoverRadius: 9,
     }];
-
     if (current && current.median_price !== null) {
-      datasets.push({
+      ds.push({
         label: "Your Search",
         data: [{ x: current.boba_index, y: current.median_price, label: current.label }],
         backgroundColor: "#f0a040",
         borderColor: "#f0a040",
         pointRadius: 10,
         pointStyle: "star",
-        pointHoverRadius: 12,
+        pointHoverRadius: 13,
       });
     }
+    return ds;
+  }
 
-    if (correlationChart) {
-      correlationChart.data.datasets = datasets;
-      correlationChart.update();
-      return;
-    }
-
-    correlationChart = new Chart(els.corrCanvas, {
-      type: "scatter",
-      data: { datasets: datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: true, labels: { color: "#8b8fa3", font: { size: 11 } } },
-          tooltip: {
-            callbacks: {
-              label: function (ctx) {
-                var pt = ctx.raw;
-                return pt.label + ": Index " + pt.x.toFixed(2) + " / $" + (pt.y / 1e6).toFixed(1) + "M";
-              },
+  function corrChartOptions(onClickPt) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: function (_evt, elements) {
+        if (!elements.length) return;
+        var el = elements[0];
+        var chart = this;
+        var pt = chart.data.datasets[el.datasetIndex].data[el.index];
+        if (pt && pt.lat && pt.lng) onClickPt(pt);
+      },
+      plugins: {
+        legend: { display: true, labels: { color: "#8b8fa3", font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var pt = ctx.raw;
+              var zip = pt.zip ? " (" + pt.zip + ")" : "";
+              return pt.label + zip + ": Index " + pt.x.toFixed(2) + " / $" + (pt.y / 1e6).toFixed(1) + "M";
             },
-          },
-        },
-        scales: {
-          x: {
-            title: { display: true, text: "Boba Index", color: "#8b8fa3" },
-            min: 0, max: 1,
-            ticks: { color: "#8b8fa3" },
-            grid: { color: "rgba(45,49,61,0.5)" },
-          },
-          y: {
-            title: { display: true, text: "Median Home Price ($)", color: "#8b8fa3" },
-            ticks: {
-              color: "#8b8fa3",
-              callback: function (v) { return "$" + (v / 1e6).toFixed(1) + "M"; },
-            },
-            grid: { color: "rgba(45,49,61,0.5)" },
           },
         },
       },
+      scales: {
+        x: {
+          title: { display: true, text: "Boba Index", color: "#8b8fa3" },
+          min: 0, max: 1,
+          ticks: { color: "#8b8fa3" },
+          grid: { color: "rgba(45,49,61,0.5)" },
+        },
+        y: {
+          title: { display: true, text: "Median Home Price ($)", color: "#8b8fa3" },
+          ticks: {
+            color: "#8b8fa3",
+            callback: function (v) { return "$" + (v / 1e6).toFixed(1) + "M"; },
+          },
+          grid: { color: "rgba(45,49,61,0.5)" },
+        },
+      },
+    };
+  }
+
+  function searchFromPoint(pt) {
+    corrOverlay.classList.add("hidden");
+    els.input.value = pt.label;
+    fetchScore({ lat: pt.lat, lng: pt.lng });
+  }
+
+  function renderCorrelationChart(data, current) {
+    if (!data || !data.length) return;
+    var ds = corrDatasets(data, current);
+    if (correlationChart) {
+      correlationChart.data.datasets = ds;
+      correlationChart.update();
+      return;
+    }
+    correlationChart = new Chart(els.corrCanvas, {
+      type: "scatter",
+      data: { datasets: ds },
+      options: corrChartOptions(searchFromPoint),
+    });
+  }
+
+  function renderFSChart(data, current) {
+    if (!data || !data.length) return;
+    var ds = corrDatasets(data, current);
+    if (correlationChartFS) {
+      correlationChartFS.data.datasets = ds;
+      correlationChartFS.update();
+      return;
+    }
+    correlationChartFS = new Chart(corrCanvasFS, {
+      type: "scatter",
+      data: { datasets: ds },
+      options: corrChartOptions(searchFromPoint),
     });
   }
 
@@ -354,9 +422,9 @@
     requestAnimationFrame(step);
   }
 
-  function yelpSearchUrl(name, address) {
-    var q = encodeURIComponent(name + " " + address);
-    return "https://www.yelp.com/search?find_desc=" + q;
+  function googleMapsUrl(name, lat, lng) {
+    var q = encodeURIComponent(name);
+    return "https://www.google.com/maps/search/" + q + "/@" + lat + "," + lng + ",17z";
   }
 
   function escapeHtml(str) {

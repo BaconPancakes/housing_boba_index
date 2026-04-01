@@ -82,6 +82,11 @@ body {
   border-radius: 6px;
   display: inline-block;
 }
+.scrape-badge {
+  color: var(--green);
+  background: rgba(52, 211, 153, .12);
+  border-color: rgba(52, 211, 153, .25);
+}
 
 /* ---- Search ---- */
 .input-group {
@@ -242,8 +247,15 @@ body {
 
 /* ---- Correlation chart ---- */
 .correlation-section { margin-top: 16px; }
+.corr-header { display: flex; align-items: center; justify-content: space-between; }
 .correlation-toggle { cursor: pointer; user-select: none; }
 .correlation-toggle:hover { color: var(--accent); }
+.corr-fs-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; padding: 4px 6px; line-height: 0;
+  transition: color .15s, border-color .15s;
+}
+.corr-fs-btn:hover { color: var(--accent); border-color: var(--accent); }
 .correlation-chart-wrap {
   margin-top: 10px;
   padding: 12px;
@@ -252,6 +264,45 @@ body {
   border-radius: var(--radius);
   height: 260px;
   position: relative;
+}
+.correlation-chart-wrap canvas { cursor: pointer; }
+.corr-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: .82rem;
+}
+
+/* ---- Correlation fullscreen overlay ---- */
+.corr-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  padding: 20px 28px;
+}
+.corr-overlay-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px; flex-shrink: 0;
+}
+.corr-overlay-header h3 {
+  font-size: 1.1rem; font-weight: 700; color: var(--text);
+}
+.corr-overlay-close {
+  background: none; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-dim); font-size: 1.4rem; cursor: pointer;
+  width: 36px; height: 36px; display: grid; place-items: center;
+  transition: color .15s, border-color .15s;
+}
+.corr-overlay-close:hover { color: var(--red); border-color: var(--red); }
+.corr-overlay-body { flex: 1; position: relative; min-height: 0; }
+.corr-overlay-body canvas { cursor: pointer; }
+.corr-overlay-hint {
+  text-align: center; font-size: .78rem; color: var(--text-dim);
+  margin-top: 8px; flex-shrink: 0;
 }
 
 /* ---- Shop list ---- */

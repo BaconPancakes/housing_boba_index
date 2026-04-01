@@ -20,6 +20,8 @@
       <p class="tagline">Find your home near the best boba.</p>
       {% if demo_mode %}
       <div class="demo-badge">DEMO MODE — no API keys configured</div>
+      {% elif scrape_mode %}
+      <div class="demo-badge scrape-badge">SCRAPE MODE — no API key needed</div>
       {% endif %}
     </header>
 
@@ -63,15 +65,36 @@
           <span class="price-label">median home price</span>
         </div>
         <div class="price-detail">
-          <span id="price-sqft">—</span>/sqft · <span id="price-zip">—</span>
+          <span id="price-zip">—</span>
         </div>
       </div>
 
       <div id="correlation-section" class="correlation-section">
-        <h3 class="section-title correlation-toggle" id="correlation-toggle">Price Correlation ▸</h3>
+        <div class="corr-header">
+          <h3 class="section-title correlation-toggle" id="correlation-toggle">Price Correlation ▸</h3>
+          <button type="button" id="corr-fullscreen-btn" class="corr-fs-btn hidden" title="Full screen">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </div>
         <div id="correlation-chart-wrap" class="correlation-chart-wrap hidden">
+          <div id="corr-loading" class="corr-loading">
+            <div class="loader"></div>
+            <p>Loading price data…</p>
+          </div>
           <canvas id="correlation-chart"></canvas>
         </div>
+      </div>
+
+      <!-- Fullscreen overlay for the correlation chart -->
+      <div id="corr-overlay" class="corr-overlay hidden">
+        <div class="corr-overlay-header">
+          <h3>Boba Index vs. Median Home Price</h3>
+          <button type="button" id="corr-overlay-close" class="corr-overlay-close">&times;</button>
+        </div>
+        <div class="corr-overlay-body">
+          <canvas id="correlation-chart-fs"></canvas>
+        </div>
+        <p class="corr-overlay-hint">Click a neighborhood to search it</p>
       </div>
 
       <h3 class="section-title" id="shops-heading">Nearby Shops</h3>
@@ -88,7 +111,7 @@
     </div>
 
     <footer class="sidebar-footer">
-      <p>Google Places · Redfin · Scoring v1.0</p>
+      <p>{% if scrape_mode %}Maps Scraper{% else %}Google Places{% endif %} · Redfin · Scoring v1.0</p>
     </footer>
   </aside>
 

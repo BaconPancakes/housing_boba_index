@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import math
 import traceback
 from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
 
-import cache
 import config
+import shop_store
 from api_clients import demo_data
 from api_clients.geocoding import geocode_address, reverse_geocode
 from api_clients.housing_prices import correlation_samples, estimate_price
@@ -18,57 +17,60 @@ from scoring import compute_index, is_premium_brand
 
 app = Flask(__name__)
 
-_EARTH_RADIUS_MI = 3958.8
-
-
-def _haversine_miles(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    dlat = math.radians(lat2 - lat1)
-    dlng = math.radians(lng2 - lng1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
-    )
-    return _EARTH_RADIUS_MI * 2 * math.asin(math.sqrt(a))
+if not config.DEMO_MODE:
+    _seeded = shop_store.seed_from_demo()
+    if _seeded:
+        print(f"  Seeded shop store with {_seeded} demo shops")  # noqa: T201
 
 
 def _fetch_shops(lat: float, lng: float) -> list[ShopData]:
-    """Fetch boba shops from Google Places or demo data depending on config.
+    """Return boba shops near *lat*, *lng*.
 
-    Results are cached by grid cell so nearby queries don't re-fetch.
+    In scrape / API mode every scraped shop is persisted in the shop
+    store (keyed by place-ID) so subsequent queries for overlapping
+    areas are pure distance lookups — no re-scraping required.
     """
-    cached: list[ShopData] | None = cache.get(lat, lng, namespace="shops")
-    if cached is not None:
-        return cached
-
     if config.DEMO_MODE:
-        shops = demo_data.search_boba_shops(lat, lng, config.SEARCH_RADIUS_MILES)
-        cache.put(lat, lng, shops, namespace="shops")
-        return shops
+        return demo_data.search_boba_shops(lat, lng, config.SEARCH_RADIUS_MILES)
 
-    shops: list[ShopData] = []
+    _ensure_coverage(lat, lng)
+    return shop_store.get_nearby(lat, lng, config.SEARCH_RADIUS_MILES)
+
+
+def _ensure_coverage(lat: float, lng: float) -> None:
+    """Scrape the area around *lat*, *lng* if it hasn't been scraped recently."""
+    if shop_store.is_cell_fresh(lat, lng):
+        return
+
     try:
-        from api_clients import google_places  # noqa: PLC0415
-
-        for s in google_places.search_boba_shops(lat, lng):
-            s["distance_miles"] = round(
-                _haversine_miles(lat, lng, s.get("lat", 0.0), s.get("lng", 0.0)),
-                2,
-            )
-            shops.append(s)
+        raw = _search_shops(lat, lng)
+        shop_store.upsert_shops(raw)
     except Exception:  # noqa: BLE001
         traceback.print_exc()
 
-    if not shops:
-        shops = demo_data.search_boba_shops(lat, lng, config.SEARCH_RADIUS_MILES)
+    shop_store.mark_cell_scraped(lat, lng)
 
-    cache.put(lat, lng, shops, namespace="shops")
-    return shops
+
+def _search_shops(lat: float, lng: float) -> list[ShopData]:
+    """Dispatch to the configured shop-search backend."""
+    if config.USE_SCRAPER:
+        from api_clients import google_maps_scraper  # noqa: PLC0415
+
+        return google_maps_scraper.search_boba_shops(lat, lng)
+
+    from api_clients import google_places  # noqa: PLC0415
+
+    return google_places.search_boba_shops(lat, lng)
 
 
 @app.route("/")
 def index() -> str:
     """Serve the single-page application."""
-    return render_template("index.html", demo_mode=config.DEMO_MODE)
+    return render_template(
+        "index.html",
+        demo_mode=config.DEMO_MODE,
+        scrape_mode=config.USE_SCRAPER,
+    )
 
 
 @app.route("/api/score", methods=["GET"])
@@ -170,20 +172,28 @@ def api_correlation() -> Response:
 
 @app.route("/api/health")
 def health() -> Response:
-    """Return service health and cache statistics."""
+    """Return service health and shop store statistics."""
     return jsonify(
         {
             "status": "ok",
             "demo_mode": config.DEMO_MODE,
             "search_radius_miles": config.SEARCH_RADIUS_MILES,
-            "cache": cache.stats(),
+            "shop_store": {
+                "total_shops": shop_store.shop_count(),
+                "scraped_cells": shop_store.cell_count(),
+            },
         }
     )
 
 
 def main() -> None:
     """Start the development server."""
-    mode = "DEMO (no API keys)" if config.DEMO_MODE else "LIVE (Google Places)"
+    if config.DEMO_MODE:
+        mode = "DEMO (curated sample data)"
+    elif config.USE_SCRAPER:
+        mode = "SCRAPE (Google Maps HTML — no API key needed)"
+    else:
+        mode = "LIVE (Google Places API)"
     print("\n  Housing Boba Index")  # noqa: T201
     print(f"  Mode: {mode}")  # noqa: T201
     print(f"  Search radius: {config.SEARCH_RADIUS_MILES} miles\n")  # noqa: T201

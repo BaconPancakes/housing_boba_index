@@ -23,11 +23,11 @@ import math
 from config import MAX_INDEX_SCORE, PREMIUM_BRANDS
 from models import IndexResult, ShopData, ShopScore
 
-DISTANCE_SIGMA: float = 0.8
+DISTANCE_SIGMA: float = 1.2
 REVIEW_LOG_BASE: int = 500
-DENSITY_BONUS_CAP: float = 20.0
-SIGMOID_MIDPOINT: float = 25.0
-SIGMOID_STEEPNESS: float = 0.08
+DENSITY_BONUS_CAP: float = 15.0
+SIGMOID_MIDPOINT: float = 80.0
+SIGMOID_STEEPNESS: float = 0.04
 MIN_RATING: float = 3.5  # shops below this rating contribute nothing to the index
 
 
