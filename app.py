@@ -16,21 +16,28 @@ import shop_store
 from api_clients.geocoding import geocode_address, reverse_geocode
 from api_clients.housing_prices import _RAW_PRICES, _ZIP_CENTROIDS, estimate_price
 from config import SEARCH_RADIUS_MILES
-from scoring import compute_index, is_blacklisted, is_curated_brand, is_premium_brand
+from scoring import Scorer, compute_raw, is_blacklisted, is_curated_brand, is_premium_brand
 
 app = Flask(__name__)
 
 _SCORE_CACHE_TTL = 90 * 86_400  # 90 days
 
-_correlation_cache: list[dict[str, Any]] | None = None
+
+def _build_scorer() -> Scorer:
+    """Calibrate a Scorer from raw scores across all zip centroids."""
+    raw_scores = [
+        compute_raw(shop_store.get_nearby(lat, lng, SEARCH_RADIUS_MILES))
+        for lat, lng in _ZIP_CENTROIDS.values()
+    ]
+    db_cache.clear("scores")
+    return Scorer(raw_scores)
+
+
+scorer = _build_scorer()
 
 
 def _compute_correlation() -> list[dict[str, Any]]:
     """Compute boba-index-vs-price correlation for all zip codes."""
-    global _correlation_cache  # noqa: PLW0603
-    if _correlation_cache is not None:
-        return _correlation_cache
-
     points: list[dict[str, Any]] = []
     for zc in sorted(_RAW_PRICES):
         if zc not in _ZIP_CENTROIDS:
@@ -38,7 +45,7 @@ def _compute_correlation() -> list[dict[str, Any]]:
         lat, lng = _ZIP_CENTROIDS[zc]
         label = _RAW_PRICES[zc]["label"]
         shops = shop_store.get_nearby(lat, lng, SEARCH_RADIUS_MILES)
-        idx = compute_index(shops)
+        idx = scorer.compute_index(shops)
         price_est = price_store.get_zip_median(zc)
         points.append({
             "zip_code": zc,
@@ -49,8 +56,6 @@ def _compute_correlation() -> list[dict[str, Any]]:
             "grade": idx.get("grade", "F"),
             "median_price": price_est["median_price"] if price_est else None,
         })
-
-    _correlation_cache = points
     return points
 
 
@@ -96,7 +101,7 @@ def api_score() -> tuple[Response, int] | Response:
         return jsonify(hit)
 
     shops = shop_store.get_nearby(lat, lng, SEARCH_RADIUS_MILES)
-    result_data = compute_index(shops)
+    result_data = scorer.compute_index(shops)
     price = estimate_price(lat, lng)
 
     visible_shops = [s for s in shops if not is_blacklisted(s.get("name", ""))]
@@ -132,10 +137,11 @@ def api_score() -> tuple[Response, int] | Response:
 def api_correlation() -> Response:
     """Return Boba Index vs. median home price for all zip codes.
 
-    Computed once on first request and cached in memory for the
-    lifetime of the server process.
+    Computed once on first request and cached for the server lifetime.
     """
-    return jsonify(_compute_correlation())
+    if not hasattr(app, "_correlation_cache"):
+        app._correlation_cache = _compute_correlation()  # type: ignore[attr-defined]
+    return jsonify(app._correlation_cache)  # type: ignore[attr-defined]
 
 
 @app.route("/api/health")

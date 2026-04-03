@@ -243,10 +243,9 @@ body {
 .stat-num { font-family: var(--mono); font-size: 1.1rem; font-weight: 700; }
 .stat-label { font-size: .68rem; color: var(--text-dim); margin-top: 2px; text-transform: uppercase; letter-spacing: .05em; }
 
-.stat-grid .stat-tip {
+.hover-tip {
   display: none;
   position: absolute;
-  left: 0; right: 0;
   top: calc(100% + 6px);
   background: linear-gradient(135deg, #1e2030, #262a3a);
   color: var(--text);
@@ -263,8 +262,11 @@ body {
   z-index: 700;
   animation: tipIn .15s ease;
 }
+.stat-tip { left: 0; right: 0; }
+.tier-icon > .hover-tip { left: 0; width: max-content; max-width: 220px; }
 @keyframes tipIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-.stat:hover .stat-tip { display: block; }
+.stat:hover .hover-tip,
+.tier-icon:hover .hover-tip { display: block; }
 
 /* ---- Price card ---- */
 .price-card {
@@ -368,6 +370,7 @@ body {
   align-items: center;
   padding: 12px 14px;
   background: var(--surface-2);
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 10px;
   cursor: pointer;
@@ -396,6 +399,8 @@ body {
   margin-right: 4px;
   font-size: .75rem;
   line-height: 1;
+  position: relative;
+  cursor: help;
 }
 .shop-details {
   display: flex;

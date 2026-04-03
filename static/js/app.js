@@ -65,10 +65,27 @@
   var corrOverlayClose = document.getElementById("corr-overlay-close");
   var corrCanvasFS = document.getElementById("correlation-chart-fs");
 
+  // ---- Shared tooltip text (single source of truth) ----
+  var TIPS = {
+    shops:    "Total boba shops within search radius",
+    premium:  "Top-tier, widely recognized boba brand",
+    curated:  "Hand-picked notable shop",
+    closest:  "Distance to the nearest boba shop",
+  };
+
+  // Populate stat-card tooltips from shared text
+  (function () {
+    var map = { shops: "tip-shops", premium: "tip-premium", curated: "tip-curated", closest: "tip-closest" };
+    for (var key in map) {
+      var el = document.getElementById(map[key]);
+      if (el) el.textContent = TIPS[key];
+    }
+  })();
+
   // ---- Tier metadata ----
   var TIER_META = {
-    premium:     { color: "#f0a040", icon: "\u2B50", label: "Premium", tip: "Top-tier, widely recognized boba brand" },
-    curated:     { color: "#34d399", icon: "\u2714\uFE0F", label: "Curated",  tip: "Hand-picked notable shop" },
+    premium:     { color: "#f0a040", icon: "\u2B50", label: "Premium", tip: TIPS.premium },
+    curated:     { color: "#34d399", icon: "\u2714\uFE0F", label: "Curated",  tip: TIPS.curated },
     default:     { color: "#60a5fa", icon: "",       label: "",        tip: "" },
     blacklisted: { color: "#6b7280", icon: "",       label: "",        tip: "" },
   };
@@ -272,9 +289,8 @@
       var googleUrl = googleMapsUrl(shop.name, shop.lat, shop.lng);
       var li = document.createElement("li");
       li.className = "shop-item" + (meta.label ? " shop-item-" + tier : "");
-      if (meta.tip) li.title = meta.tip;
       var iconHtml = meta.icon
-        ? '<span class="tier-icon">' + meta.icon + '</span>'
+        ? '<span class="tier-icon">' + meta.icon + '<span class="hover-tip">' + meta.tip + '</span></span>'
         : "";
       li.innerHTML =
         '<div style="min-width:0">' +

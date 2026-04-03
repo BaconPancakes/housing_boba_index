@@ -2,6 +2,12 @@
 
 SEARCH_RADIUS_MILES: float = 3.0
 SEARCH_RADIUS_METERS: int = int(SEARCH_RADIUS_MILES * 1609.34)
+WEIGHT_PREMIUM: float = 10.0
+WEIGHT_CURATED: float = 5
+WEIGHT_DEFAULT: float = 1.0
+
+MAX_INDEX_SCORE: float = 1.0
+
 
 # ── Shop prestige tiers (matched as case-insensitive substrings) ──────
 #
@@ -30,8 +36,9 @@ CURATED_BRANDS: set[str] = {
     "7 leaves",
     "o2 valley",
     "boba bliss",
-    "tastea",
-    "shang yu lin"
+    "shang yu lin",
+    "teaspoon,"
+    "yifang",
 }
 
 BLACKLISTED_SHOPS: set[str] = {
@@ -48,8 +55,3 @@ BLACKLISTED_SHOPS: set[str] = {
     "mochi waffle corner",
 }
 
-WEIGHT_PREMIUM: float = 3.0
-WEIGHT_CURATED: float = 2.0
-WEIGHT_DEFAULT: float = 1.0
-
-MAX_INDEX_SCORE: float = 1.0
