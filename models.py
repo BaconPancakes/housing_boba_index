@@ -13,12 +13,12 @@ class ShopData(TypedDict, total=False):
     name: str
     lat: float
     lng: float
-    rating: float
-    review_count: int
     address: str
     categories: list[str]
     distance_miles: float
     is_premium: bool
+    is_curated: bool
+    is_blacklisted: bool
 
 
 class GeoResult(TypedDict):
@@ -34,13 +34,9 @@ class ShopScore(TypedDict):
 
     shop_id: str
     name: str
-    rating: float
-    review_count: int
-    brand_multiplier: float
+    tier: str
+    tier_weight: float
     distance_miles: float
-    distance_weight: float
-    quality: float
-    confidence: float
     raw_contribution: float
 
 
@@ -50,7 +46,6 @@ class IndexResult(TypedDict, total=False):
     index: float
     grade: str
     shop_count: int
-    density_bonus: float
     raw_total: float
     breakdown: list[ShopScore]
     summary: str

@@ -1,76 +1,68 @@
-"""Housing Boba Index -- Flask application."""
+"""Housing Boba Index -- Flask application.
+
+Production mode: reads from a pre-seeded ``shops.db`` (populated offline
+by ``seed_db.py``).  No scraping or external API calls for shop data.
+"""
 
 from __future__ import annotations
 
-import traceback
 from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
 
-import config
+import db_cache
+import price_store
 import shop_store
-from api_clients import demo_data
 from api_clients.geocoding import geocode_address, reverse_geocode
-from api_clients.housing_prices import correlation_samples, estimate_price
-from models import ShopData
-from scoring import compute_index, is_premium_brand
+from api_clients.housing_prices import _RAW_PRICES, _ZIP_CENTROIDS, estimate_price
+from config import SEARCH_RADIUS_MILES
+from scoring import compute_index, is_blacklisted, is_curated_brand, is_premium_brand
 
 app = Flask(__name__)
 
-if not config.DEMO_MODE:
-    _seeded = shop_store.seed_from_demo()
-    if _seeded:
-        print(f"  Seeded shop store with {_seeded} demo shops")  # noqa: T201
+_SCORE_CACHE_TTL = 90 * 86_400  # 90 days
+
+_correlation_cache: list[dict[str, Any]] | None = None
 
 
-def _fetch_shops(lat: float, lng: float) -> list[ShopData]:
-    """Return boba shops near *lat*, *lng*.
+def _compute_correlation() -> list[dict[str, Any]]:
+    """Compute boba-index-vs-price correlation for all zip codes."""
+    global _correlation_cache  # noqa: PLW0603
+    if _correlation_cache is not None:
+        return _correlation_cache
 
-    In scrape / API mode every scraped shop is persisted in the shop
-    store (keyed by place-ID) so subsequent queries for overlapping
-    areas are pure distance lookups — no re-scraping required.
-    """
-    if config.DEMO_MODE:
-        return demo_data.search_boba_shops(lat, lng, config.SEARCH_RADIUS_MILES)
+    points: list[dict[str, Any]] = []
+    for zc in sorted(_RAW_PRICES):
+        if zc not in _ZIP_CENTROIDS:
+            continue
+        lat, lng = _ZIP_CENTROIDS[zc]
+        label = _RAW_PRICES[zc]["label"]
+        shops = shop_store.get_nearby(lat, lng, SEARCH_RADIUS_MILES)
+        idx = compute_index(shops)
+        price_est = price_store.get_zip_median(zc)
+        points.append({
+            "zip_code": zc,
+            "label": label,
+            "lat": lat,
+            "lng": lng,
+            "boba_index": idx.get("index", 0),
+            "grade": idx.get("grade", "F"),
+            "median_price": price_est["median_price"] if price_est else None,
+        })
 
-    _ensure_coverage(lat, lng)
-    return shop_store.get_nearby(lat, lng, config.SEARCH_RADIUS_MILES)
-
-
-def _ensure_coverage(lat: float, lng: float) -> None:
-    """Scrape the area around *lat*, *lng* if it hasn't been scraped recently."""
-    if shop_store.is_cell_fresh(lat, lng):
-        return
-
-    try:
-        raw = _search_shops(lat, lng)
-        shop_store.upsert_shops(raw)
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
-
-    shop_store.mark_cell_scraped(lat, lng)
+    _correlation_cache = points
+    return points
 
 
-def _search_shops(lat: float, lng: float) -> list[ShopData]:
-    """Dispatch to the configured shop-search backend."""
-    if config.USE_SCRAPER:
-        from api_clients import google_maps_scraper  # noqa: PLC0415
-
-        return google_maps_scraper.search_boba_shops(lat, lng)
-
-    from api_clients import google_places  # noqa: PLC0415
-
-    return google_places.search_boba_shops(lat, lng)
+def _cache_key(lat: float, lng: float) -> str:
+    """Round to ~100 m grid for cache dedup."""
+    return f"{lat:.3f},{lng:.3f}"
 
 
 @app.route("/")
 def index() -> str:
     """Serve the single-page application."""
-    return render_template(
-        "index.html",
-        demo_mode=config.DEMO_MODE,
-        scrape_mode=config.USE_SCRAPER,
-    )
+    return render_template("index.html")
 
 
 @app.route("/api/score", methods=["GET"])
@@ -96,18 +88,25 @@ def api_score() -> tuple[Response, int] | Response:
     else:
         return jsonify({"error": "Provide 'address' or both 'lat' and 'lng'."}), 400
 
-    shops = _fetch_shops(lat, lng)
-    result_data = compute_index(shops)
+    ck = _cache_key(lat, lng)
+    cached = db_cache.get("scores", ck, ttl=_SCORE_CACHE_TTL)
+    if cached and cached.is_fresh:
+        hit: dict[str, Any] = cached.value
+        hit["address"] = resolved_address
+        return jsonify(hit)
 
+    shops = shop_store.get_nearby(lat, lng, SEARCH_RADIUS_MILES)
+    result_data = compute_index(shops)
     price = estimate_price(lat, lng)
+
+    visible_shops = [s for s in shops if not is_blacklisted(s.get("name", ""))]
 
     response: dict[str, Any] = {
         **result_data,
         "address": resolved_address,
         "lat": lat,
         "lng": lng,
-        "demo_mode": config.DEMO_MODE,
-        "search_radius_miles": config.SEARCH_RADIUS_MILES,
+        "search_radius_miles": SEARCH_RADIUS_MILES,
         "price_estimate": price,
         "shops": [
             {
@@ -115,59 +114,28 @@ def api_score() -> tuple[Response, int] | Response:
                 "name": s.get("name", ""),
                 "lat": s.get("lat", 0.0),
                 "lng": s.get("lng", 0.0),
-                "rating": s.get("rating", 0),
-                "review_count": s.get("review_count", 0),
                 "address": s.get("address", ""),
                 "distance_miles": s.get("distance_miles", 0),
                 "categories": s.get("categories", []),
                 "is_premium": is_premium_brand(s.get("name", "")),
+                "is_curated": is_curated_brand(s.get("name", "")),
             }
-            for s in shops
+            for s in visible_shops
         ],
     }
 
+    db_cache.put("scores", ck, response)
     return jsonify(response)
 
 
 @app.route("/api/correlation")
 def api_correlation() -> Response:
-    """Return Boba Index vs. median home price for sample Bay Area locations.
+    """Return Boba Index vs. median home price for all zip codes.
 
-    Used by the frontend scatter-plot chart. Results are computed once and
-    cached for the server lifetime.
+    Computed once on first request and cached in memory for the
+    lifetime of the server process.
     """
-    import db_cache  # noqa: PLC0415
-
-    _corr_ttl = 90 * 86_400
-    entry = db_cache.get("correlation", "all", ttl=_corr_ttl)
-    if entry and entry.is_fresh:
-        return jsonify(entry.value)
-
-    points: list[dict[str, Any]] = []
-    for sample in correlation_samples():
-        lat = float(sample["lat"])
-        lng = float(sample["lng"])
-        zc = str(sample["zip"])
-        label = str(sample["label"])
-
-        shops = _fetch_shops(lat, lng)
-        idx = compute_index(shops)
-        price = estimate_price(lat, lng, zip_code=zc)
-
-        points.append(
-            {
-                "label": label,
-                "lat": lat,
-                "lng": lng,
-                "boba_index": idx.get("index", 0),
-                "grade": idx.get("grade", "F"),
-                "median_price": price["median_price"] if price else None,
-                "zip_code": zc,
-            }
-        )
-
-    db_cache.put("correlation", "all", points)
-    return jsonify(points)
+    return jsonify(_compute_correlation())
 
 
 @app.route("/api/health")
@@ -176,8 +144,7 @@ def health() -> Response:
     return jsonify(
         {
             "status": "ok",
-            "demo_mode": config.DEMO_MODE,
-            "search_radius_miles": config.SEARCH_RADIUS_MILES,
+            "search_radius_miles": SEARCH_RADIUS_MILES,
             "shop_store": {
                 "total_shops": shop_store.shop_count(),
                 "scraped_cells": shop_store.cell_count(),
@@ -188,15 +155,12 @@ def health() -> Response:
 
 def main() -> None:
     """Start the development server."""
-    if config.DEMO_MODE:
-        mode = "DEMO (curated sample data)"
-    elif config.USE_SCRAPER:
-        mode = "SCRAPE (Google Maps HTML — no API key needed)"
-    else:
-        mode = "LIVE (Google Places API)"
+    n = shop_store.shop_count()
     print("\n  Housing Boba Index")  # noqa: T201
-    print(f"  Mode: {mode}")  # noqa: T201
-    print(f"  Search radius: {config.SEARCH_RADIUS_MILES} miles\n")  # noqa: T201
+    print(f"  Shop DB: {n} shops loaded")  # noqa: T201
+    print(f"  Search radius: {SEARCH_RADIUS_MILES} miles\n")  # noqa: T201
+    if n == 0:
+        print("  WARNING: shops.db is empty — run `uv run seed_db.py` first.\n")  # noqa: T201
     app.run(debug=True, host="0.0.0.0", port=5000)  # noqa: S104, S201
 
 

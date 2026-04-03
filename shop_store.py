@@ -1,16 +1,16 @@
 """Persistent shop store backed by SQLite.
 
-Every scraped shop is stored individually by place ID so that subsequent
-queries only need a distance lookup — no re-scraping required for areas
-that have already been covered.
+Stores all boba shop data in a single ``shops.db`` file that is pre-seeded
+offline by ``seed_db.py`` and shipped read-only to production.
 
-A separate ``scraped_cells`` table tracks which grid cells have been
-scraped (and when), so we know when fresh data needs to be fetched.
+Tables:
+- ``shops`` -- one row per physical shop (name, lat/lng, address).
+- ``scraped_cells`` -- tracks which grid cells have been scraped (for
+  incremental re-seeding).
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import sqlite3
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from models import ShopData
 
-_DB_PATH: Path = Path(__file__).parent / "cache.db"
+_DB_PATH: Path = Path(__file__).parent / "shops.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS shops (
@@ -27,8 +27,6 @@ CREATE TABLE IF NOT EXISTS shops (
     name         TEXT NOT NULL,
     lat          REAL NOT NULL,
     lng          REAL NOT NULL,
-    rating       REAL NOT NULL DEFAULT 0,
-    review_count INTEGER NOT NULL DEFAULT 0,
     address      TEXT NOT NULL DEFAULT '',
     categories   TEXT NOT NULL DEFAULT '[]',
     source       TEXT NOT NULL DEFAULT '',
@@ -41,7 +39,7 @@ CREATE TABLE IF NOT EXISTS scraped_cells (
 );
 """
 
-CELL_PRECISION: int = 2  # ~0.7 mi grid cells (coarser than old cache)
+CELL_PRECISION: int = 2  # ~0.7 mi grid cells
 CELL_TTL: int = 7 * 86_400  # re-scrape after 7 days
 
 _EARTH_RADIUS_MI = 3958.8
@@ -79,8 +77,20 @@ def _haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 # ── public API ────────────────────────────────────────────────────────
 
 
+def _normalize_name(name: str) -> str:
+    """Lower-case, strip whitespace for fuzzy matching."""
+    return name.lower().strip()
+
+
+_DEDUP_RADIUS_MI = 0.05  # ~80 m — same storefront
+
+
 def upsert_shops(shops: list[ShopData]) -> int:
-    """Insert or update shops in the store.  Returns count of new inserts."""
+    """Insert or update shops in the store.  Returns count of rows touched.
+
+    Before inserting, removes any existing row that shares the same
+    normalised name and is within ~80 m (prevents cross-source duplicates).
+    """
     now = time.time()
     added = 0
     with _conn() as conn:
@@ -88,24 +98,28 @@ def upsert_shops(shops: list[ShopData]) -> int:
             sid = s.get("id", "")
             if not sid:
                 continue
+
+            slat = s.get("lat", 0.0)
+            slng = s.get("lng", 0.0)
+            norm = _normalize_name(s.get("name", ""))
             cats = json.dumps(s.get("categories", []))
+
+            if norm:
+                _remove_near_duplicates(conn, sid, norm, slat, slng)
+
             conn.execute(
-                """INSERT INTO shops (id, name, lat, lng, rating, review_count,
+                """INSERT INTO shops (id, name, lat, lng,
                                      address, categories, source, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
-                       rating = excluded.rating,
-                       review_count = excluded.review_count,
                        address = excluded.address,
                        categories = excluded.categories,
                        fetched_at = excluded.fetched_at""",
                 (
                     sid,
                     s.get("name", ""),
-                    s.get("lat", 0.0),
-                    s.get("lng", 0.0),
-                    s.get("rating", 0.0),
-                    s.get("review_count", 0),
+                    slat,
+                    slng,
                     s.get("address", ""),
                     cats,
                     s.get("source", ""),
@@ -114,6 +128,29 @@ def upsert_shops(shops: list[ShopData]) -> int:
             )
             added += 1
     return added
+
+
+def _remove_near_duplicates(
+    conn: sqlite3.Connection,
+    new_id: str,
+    norm_name: str,
+    lat: float,
+    lng: float,
+) -> None:
+    """Delete existing rows that are the same physical shop under a different ID."""
+    dlat = _DEDUP_RADIUS_MI / 69.0
+    dlng = _DEDUP_RADIUS_MI / (69.0 * math.cos(math.radians(lat)) if lat else 69.0)
+    rows = conn.execute(
+        """SELECT id, name, lat, lng FROM shops
+           WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
+             AND id != ?""",
+        (lat - dlat, lat + dlat, lng - dlng, lng + dlng, new_id),
+    ).fetchall()
+    for row_id, row_name, rlat, rlng in rows:
+        if _normalize_name(row_name) != norm_name:
+            continue
+        if _haversine(lat, lng, rlat, rlng) <= _DEDUP_RADIUS_MI:
+            conn.execute("DELETE FROM shops WHERE id = ?", (row_id,))
 
 
 def mark_cell_scraped(lat: float, lng: float) -> None:
@@ -150,8 +187,7 @@ def get_nearby(lat: float, lng: float, radius_miles: float) -> list[ShopData]:
 
     with _conn() as conn:
         rows = conn.execute(
-            """SELECT id, name, lat, lng, rating, review_count,
-                      address, categories, source
+            """SELECT id, name, lat, lng, address, categories, source
                FROM shops
                WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?""",
             (lat_lo, lat_hi, lng_lo, lng_hi),
@@ -159,7 +195,7 @@ def get_nearby(lat: float, lng: float, radius_miles: float) -> list[ShopData]:
 
     results: list[ShopData] = []
     for row in rows:
-        sid, name, slat, slng, rating, reviews, addr, cats_json, source = row
+        sid, name, slat, slng, addr, cats_json, source = row
         dist = _haversine(lat, lng, slat, slng)
         if dist > radius_miles:
             continue
@@ -170,15 +206,47 @@ def get_nearby(lat: float, lng: float, radius_miles: float) -> list[ShopData]:
                 "name": name,
                 "lat": slat,
                 "lng": slng,
-                "rating": rating,
-                "review_count": reviews,
                 "address": addr,
                 "categories": json.loads(cats_json),
                 "distance_miles": round(dist, 2),
             }
         )
     results.sort(key=lambda s: s.get("distance_miles", 0.0))
-    return results
+    return _dedup_results(results)
+
+
+def _dedup_results(shops: list[ShopData]) -> list[ShopData]:
+    """Remove duplicate entries for the same physical shop.
+
+    When two rows share a normalised name and are within ~80 m, keep
+    the one from a live source (google / google_scrape) over demo data.
+    """
+    kept: list[ShopData] = []
+    seen: dict[str, int] = {}  # norm_name -> index in kept
+
+    source_rank = {"google": 2, "google_scrape": 1, "demo": 0}
+
+    for shop in shops:
+        norm = _normalize_name(shop.get("name", ""))
+        if norm in seen:
+            idx = seen[norm]
+            existing = kept[idx]
+            if _haversine(
+                shop.get("lat", 0.0), shop.get("lng", 0.0),
+                existing.get("lat", 0.0), existing.get("lng", 0.0),
+            ) <= _DEDUP_RADIUS_MI:
+                s_rank = source_rank.get(shop.get("source", ""), 0)
+                e_rank = source_rank.get(existing.get("source", ""), 0)
+                if s_rank > e_rank:
+                    kept[idx] = shop
+                continue
+
+        seen[norm] = len(kept)
+        kept.append(shop)
+    return kept
+
+
+# ── Stats / utilities ────────────────────────────────────────────────
 
 
 def shop_count() -> int:
@@ -191,54 +259,6 @@ def cell_count() -> int:
     """Total number of scraped grid cells."""
     with _conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM scraped_cells").fetchone()[0]  # type: ignore[no-any-return]
-
-
-def seed_from_demo() -> int:
-    """Load demo shops into the store and mark the Bay Area as covered.
-
-    Inserts all demo shops and marks every neighbourhood centroid cell
-    (plus every shop cell) as freshly scraped so that subsequent
-    ``_ensure_coverage`` calls are no-ops for those areas.
-
-    Idempotent — skips the seed if the store already has data.
-    Returns the number of shops inserted.
-    """
-    if shop_count() > 0:
-        return 0
-
-    from api_clients.demo_data import DEMO_SHOPS_DB  # noqa: PLC0415
-    from api_clients.housing_prices import _ZIP_CENTROIDS  # noqa: PLC0415
-
-    shops: list[ShopData] = [
-        {
-            "source": "demo",
-            "id": hashlib.md5(
-                f"{s['name']}:{s['lat']:.5f}:{s['lng']:.5f}".encode(),
-                usedforsecurity=False,
-            ).hexdigest(),
-            "name": s["name"],
-            "lat": s["lat"],
-            "lng": s["lng"],
-            "rating": s["rating"],
-            "review_count": s["reviews"],
-            "address": s["addr"],
-            "categories": ["Bubble Tea", "Tea"],
-        }
-        for s in DEMO_SHOPS_DB
-    ]
-    n = upsert_shops(shops)
-
-    seen_cells: set[str] = set()
-    all_points = [(s.get("lat", 0.0), s.get("lng", 0.0)) for s in shops]
-    all_points.extend(_ZIP_CENTROIDS.values())
-
-    for plat, plng in all_points:
-        key = _cell_key(plat, plng)
-        if key not in seen_cells:
-            seen_cells.add(key)
-            mark_cell_scraped(plat, plng)
-
-    return n
 
 
 def clear() -> None:

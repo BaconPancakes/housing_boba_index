@@ -538,8 +538,6 @@ def search_boba_shops(
                     "name": shop["name"],
                     "lat": shop["lat"],
                     "lng": shop["lng"],
-                    "rating": shop["rating"],
-                    "review_count": shop["reviews"],
                     "address": shop["addr"],
                     "categories": ["Bubble Tea", "Tea"],
                     "distance_miles": round(dist, 2),

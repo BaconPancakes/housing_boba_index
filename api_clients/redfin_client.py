@@ -113,32 +113,27 @@ def _fetch_zip_properties(zip_code: str) -> list[dict[str, Any]]:
     return homes
 
 
-def median_by_zip(zip_code: str) -> PriceEstimate | None:
-    """Scrape the Redfin housing-market page for the median sale price.
+_SFH_PROPERTY_TYPE = 6
 
-    Uses the ``/zipcode/<zip>/housing-market`` page which contains
-    pre-rendered median sale price and other market statistics. Single
-    HTTP request, authoritative Redfin data.
 
-    Args:
-        zip_code: 5-digit zip code (e.g. ``"95014"``).
+def _extract_region_id(data_cache: dict[str, Any]) -> str | None:
+    """Extract the Redfin region ID from the data cache keys."""
+    for key in data_cache:
+        if "home_prices" in key:
+            parts = key.split("/")
+            if len(parts) >= 6:  # noqa: PLR2004
+                return parts[5]
+    return None
 
-    Returns:
-        A ``PriceEstimate`` with the median sale price, or ``None`` on failure.
-    """
-    html = _fetch_page(f"https://www.redfin.com/zipcode/{zip_code}/housing-market")
-    if not html:
-        return None
 
-    dc = _get_data_cache(html)
-
+def _parse_price_metrics(data_cache: dict[str, Any]) -> tuple[int | None, int]:
+    """Extract median price and $/sqft from the home_prices data cache entry."""
     median_price: int | None = None
     median_ppsf: int = 0
-
-    for key in dc:
+    for key in data_cache:
         if "home_prices" not in key:
             continue
-        body = _decode_body(dc[key].get("res", {}).get("text", ""))
+        body = _decode_body(data_cache[key].get("res", {}).get("text", ""))
         for metric in body.get("payload", {}).get("metrics", []):
             label: str = metric.get("label", "")
             val_str: str = metric.get("value", "")
@@ -149,16 +144,98 @@ def median_by_zip(zip_code: str) -> PriceEstimate | None:
                 median_price = int(cleaned)
             elif "Median" in label and "Sq" in label:
                 median_ppsf = int(cleaned)
+    return median_price, median_ppsf
+
+
+def median_by_zip(zip_code: str) -> PriceEstimate | None:
+    """Scrape Redfin for the **Single Family Home** median sale price in a zip.
+
+    Two-step approach:
+    1. Fetch the housing-market page to discover the ``region_id``.
+    2. Hit the stingray graph API with property type 6 (SFH) for the
+       filtered median.  Falls back to the all-types median if the
+       SFH-specific request returns no data.
+
+    Args:
+        zip_code: 5-digit zip code (e.g. ``"95014"``).
+
+    Returns:
+        A ``PriceEstimate`` with the SFH median sale price, or ``None``.
+    """
+    html = _fetch_page(f"https://www.redfin.com/zipcode/{zip_code}/housing-market")
+    if not html:
+        return None
+
+    dc = _get_data_cache(html)
+    region_id = _extract_region_id(dc)
+
+    if region_id:
+        sfh_est = _fetch_sfh_median(zip_code, region_id)
+        if sfh_est:
+            return sfh_est
+
+    median_price, median_ppsf = _parse_price_metrics(dc)
+    if not median_price:
+        return None
+
+    return {
+        "zip_code": zip_code,
+        "label": "Redfin median sale (all types)",
+        "median_price": median_price,
+        "price_per_sqft": median_ppsf,
+        "source": "redfin",
+    }
+
+
+def _fetch_sfh_median(zip_code: str, region_id: str) -> PriceEstimate | None:
+    """Fetch SFH-only median from the stingray graph API."""
+    url = (
+        f"https://www.redfin.com/stingray/api/graph/2/{region_id}/"
+        f"{_SFH_PROPERTY_TYPE}/regional-housing-market/home_prices"
+    )
+    try:
+        resp = requests.get(
+            url,
+            headers={**_HEADERS, "Accept": "*/*", "Referer": f"https://www.redfin.com/zipcode/{zip_code}/housing-market"},
+            timeout=_TIMEOUT,
+        )
+        if not resp.ok:
+            return None
+    except requests.RequestException:
+        return None
+
+    text = resp.text.removeprefix(_STINGRAY_PREFIX)
+    try:
+        data: dict[str, Any] = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+    metrics: list[dict[str, str]] = data.get("payload", {}).get("metrics", [])
+    if not metrics:
+        return None
+
+    median_price: int | None = None
+    median_ppsf: int = 0
+    for metric in metrics:
+        label = metric.get("label", "")
+        val_str = metric.get("value", "")
+        if not val_str:
+            continue
+        cleaned = val_str.replace("$", "").replace(",", "")
+        if "Median Sale Price" in label:
+            median_price = int(cleaned)
+        elif "Median" in label and "Sq" in label:
+            median_ppsf = int(cleaned)
 
     if not median_price:
         return None
 
     return {
         "zip_code": zip_code,
-        "label": "Redfin median sale",
+        "label": "Redfin SFH median sale",
         "median_price": median_price,
         "price_per_sqft": median_ppsf,
-        "source": "redfin",
+        "source": "redfin_sfh",
     }
 
 

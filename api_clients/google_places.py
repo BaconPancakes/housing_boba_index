@@ -7,7 +7,11 @@ from typing import Any
 
 import requests
 
-from config import GOOGLE_PLACES_API_KEY, SEARCH_RADIUS_METERS
+import os
+
+from config import SEARCH_RADIUS_METERS
+
+GOOGLE_PLACES_API_KEY: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
 from models import ShopData
 
 TEXTSEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
@@ -25,8 +29,6 @@ def _parse_place(place: dict[str, Any]) -> ShopData:
         "name": str(place["name"]),
         "lat": float(loc.get("lat", 0)),
         "lng": float(loc.get("lng", 0)),
-        "rating": float(place.get("rating", 0)),
-        "review_count": int(place.get("user_ratings_total", 0)),
         "address": str(place.get("formatted_address", "")),
         "categories": list(place.get("types", [])),
     }

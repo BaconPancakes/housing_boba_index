@@ -1,22 +1,24 @@
 """Housing price estimates for the Bay Area.
 
-Uses a two-tier approach:
-1. **Redfin scrape** -- for addresses with a known Redfin property URL,
-   fetches the live Redfin Estimate (AVM) directly from the page.
-2. **Demo data** -- curated median home prices by zip code, used as fallback.
+Production path: reads pre-seeded data from ``prices.db`` (populated
+offline by ``seed_db.py``).  No runtime scraping.
+
+Lookup chain:
+1. Nearest AVM grid point within ~1 mi (per-property Redfin estimate).
+2. Zip-level median price.
+3. ``None`` — frontend shows "no price data".
+
+The hardcoded ``_RAW_PRICES`` and ``_ZIP_CENTROIDS`` dicts are still
+used by the seeder as fallback source data and for zip resolution.
 """
 
 from __future__ import annotations
 
-import logging
 import math
 from typing import TypedDict
 
+import price_store
 from models import PriceEstimate
-
-_log = logging.getLogger(__name__)
-
-_PRICE_TTL: int = 90 * 86_400  # 90 days
 
 
 class _ZipData(TypedDict):
@@ -106,24 +108,19 @@ _RAW_PRICES: dict[str, _ZipData] = {
 }
 
 _ZIP_CENTROIDS: dict[str, tuple[float, float]] = {
-    # ── Cupertino ──
     "95014": (37.323, -122.015),
-    # ── Sunnyvale ──
     "94085": (37.386, -121.995),
     "94086": (37.372, -122.025),
     "94087": (37.350, -122.035),
     "94089": (37.399, -122.028),
-    # ── Mountain View ──
     "94040": (37.373, -122.092),
     "94041": (37.390, -122.078),
     "94043": (37.406, -122.077),
-    # ── Palo Alto / Menlo Park ──
     "94025": (37.452, -122.182),
     "94301": (37.445, -122.160),
     "94303": (37.450, -122.120),
     "94304": (37.420, -122.148),
     "94306": (37.418, -122.130),
-    # ── San Jose ──
     "95110": (37.335, -121.905),
     "95112": (37.350, -121.880),
     "95113": (37.335, -121.890),
@@ -148,39 +145,29 @@ _ZIP_CENTROIDS: dict[str, tuple[float, float]] = {
     "95135": (37.310, -121.780),
     "95136": (37.280, -121.850),
     "95148": (37.330, -121.790),
-    # ── Campbell ──
     "95008": (37.287, -121.940),
-    # ── Milpitas ──
     "95035": (37.433, -121.900),
-    # ── Santa Clara ──
     "95050": (37.355, -121.955),
     "95051": (37.350, -121.975),
     "95054": (37.395, -121.960),
-    # ── Fremont ──
     "94536": (37.555, -121.985),
     "94538": (37.500, -121.960),
     "94539": (37.525, -121.920),
     "94555": (37.555, -122.040),
-    # ── Union City ──
     "94587": (37.590, -122.020),
-    # ── Redwood City ──
     "94063": (37.485, -122.220),
-    # ── San Mateo / Burlingame / Millbrae ──
     "94010": (37.580, -122.345),
     "94030": (37.598, -122.390),
     "94401": (37.570, -122.320),
     "94402": (37.550, -122.310),
     "94403": (37.535, -122.305),
-    # ── Oakland ──
     "94607": (37.795, -122.285),
     "94610": (37.810, -122.245),
     "94611": (37.835, -122.245),
     "94612": (37.805, -122.270),
-    # ── Berkeley ──
     "94702": (37.865, -122.290),
     "94704": (37.865, -122.260),
     "94709": (37.880, -122.268),
-    # ── Los Gatos / Saratoga ──
     "95030": (37.230, -121.960),
     "95070": (37.264, -122.023),
 }
@@ -211,78 +198,25 @@ def _nearest_zip(lat: float, lng: float) -> str | None:
     return best_zip
 
 
-def _demo_estimate(zip_code: str) -> PriceEstimate | None:
-    data = _RAW_PRICES.get(zip_code)
-    if not data:
-        return None
-    return {
-        "zip_code": zip_code,
-        "label": data["label"],
-        "median_price": data["median_price"],
-        "price_per_sqft": data["price_per_sqft"],
-        "source": "demo",
-    }
-
-
 def estimate_price(
     lat: float,
     lng: float,
     zip_code: str | None = None,
-    *,
-    try_redfin: bool = True,
 ) -> PriceEstimate | None:
-    """Estimate housing price for a location.
+    """Return the SFH median home price for the nearest zip code.
 
-    Tries a live Redfin scrape for the nearest known property URL, then
-    falls back to demo zip code data.
-
-    Args:
-        lat: Latitude of the property.
-        lng: Longitude of the property.
-        zip_code: Optional zip code string (e.g. ``"94087"``).
-        try_redfin: Whether to attempt the live Redfin scrape.
-
-    Returns:
-        A ``PriceEstimate`` dict, or ``None`` if no data is available.
+    Resolves the zip from the argument or nearest centroid, then looks
+    up the pre-seeded median in ``prices.db``.
     """
     resolved_zip = zip_code if (zip_code and zip_code in _RAW_PRICES) else _nearest_zip(lat, lng)
     if not resolved_zip:
         return None
 
-    import db_cache  # noqa: PLC0415
-
-    entry = db_cache.get("prices", resolved_zip, ttl=_PRICE_TTL)
-    if entry and entry.is_fresh:
-        return entry.value  # type: ignore[return-value]
-
-    stale_fallback: PriceEstimate | None = entry.value if entry else None  # type: ignore[assignment]
-
-    if try_redfin:
-        try:
-            from api_clients.redfin_client import median_by_zip  # noqa: PLC0415
-
-            live = median_by_zip(resolved_zip)
-            if live:
-                db_cache.put("prices", resolved_zip, live)
-                return live
-        except Exception:  # noqa: BLE001
-            _log.exception("Redfin scrape failed for zip %s", resolved_zip)
-
-    if stale_fallback:
-        return stale_fallback
-
-    demo = _demo_estimate(resolved_zip)
-    if demo:
-        db_cache.put("prices", resolved_zip, demo)
-    return demo
+    return price_store.get_zip_median(resolved_zip)
 
 
 def correlation_samples() -> list[dict[str, str | float]]:
-    """Generate a correlation sample point for every zip code in the database.
-
-    Returns:
-        One entry per zip with ``label``, ``lat``, ``lng``, and ``zip`` fields.
-    """
+    """Generate a correlation sample point for every zip code in the database."""
     return [
         {
             "label": _RAW_PRICES[zc]["label"],

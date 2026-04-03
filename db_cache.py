@@ -1,8 +1,8 @@
 """Persistent SQLite cache with namespace support.
 
-A single ``cache.db`` file stores all cached data — boba shop results,
-housing price estimates, and any other namespaced entries. Stale entries
-are never deleted; they serve as fallback when a live refresh fails.
+Stores score-by-address caches, housing price lookups, and any other
+namespaced KV entries.  Colocated in ``shops.db`` alongside shop and
+correlation data.
 
 Each namespace can have its own TTL.
 """
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
-_DB_PATH: Path = Path(__file__).parent / "cache.db"
+_DB_PATH: Path = Path(__file__).parent / "shops.db"
 
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS kv (

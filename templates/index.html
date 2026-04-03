@@ -12,17 +12,13 @@
 </head>
 <body>
   <aside id="sidebar">
+    <div class="sidebar-resize" id="sidebar-resize"></div>
     <header class="sidebar-header">
       <div class="logo-row">
         <span class="logo-bubble">🧋</span>
         <h1>Housing<br>Boba Index</h1>
       </div>
       <p class="tagline">Find your home near the best boba.</p>
-      {% if demo_mode %}
-      <div class="demo-badge">DEMO MODE — no API keys configured</div>
-      {% elif scrape_mode %}
-      <div class="demo-badge scrape-badge">SCRAPE MODE — no API key needed</div>
-      {% endif %}
     </header>
 
     <form id="search-form" autocomplete="off">
@@ -53,16 +49,28 @@
       <p class="summary-text" id="summary-text"></p>
 
       <div class="stat-grid">
-        <div class="stat"><span class="stat-num" id="stat-shops">0</span><span class="stat-label">Shops</span></div>
-        <div class="stat"><span class="stat-num" id="stat-premium">0</span><span class="stat-label">Premium</span></div>
-        <div class="stat"><span class="stat-num" id="stat-closest">—</span><span class="stat-label">Closest (mi)</span></div>
-        <div class="stat"><span class="stat-num" id="stat-avg-rating">—</span><span class="stat-label">Avg Rating</span></div>
+        <div class="stat">
+          <span class="stat-num" id="stat-shops">0</span><span class="stat-label">🧋 Shops</span>
+          <span class="stat-tip">Total boba shops within search radius</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num" id="stat-premium">0</span><span class="stat-label">⭐ Premium</span>
+          <span class="stat-tip">Top-tier, widely recognized boba brands</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num" id="stat-curated">0</span><span class="stat-label">✔️ Curated</span>
+          <span class="stat-tip">Hand-picked notable shops</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num" id="stat-closest">—</span><span class="stat-label">📍 Closest</span>
+          <span class="stat-tip">Distance to the nearest boba shop</span>
+        </div>
       </div>
 
       <div id="price-card" class="price-card hidden">
         <div class="price-main">
           <span class="price-value" id="price-value">—</span>
-          <span class="price-label">median home price</span>
+          <span class="price-label">median SFH sale price</span>
         </div>
         <div class="price-detail">
           <span id="price-zip">—</span>
@@ -88,7 +96,7 @@
       <!-- Fullscreen overlay for the correlation chart -->
       <div id="corr-overlay" class="corr-overlay hidden">
         <div class="corr-overlay-header">
-          <h3>Boba Index vs. Median Home Price</h3>
+          <h3>Boba Index vs. Median SFH Sale Price</h3>
           <button type="button" id="corr-overlay-close" class="corr-overlay-close">&times;</button>
         </div>
         <div class="corr-overlay-body">
@@ -111,7 +119,7 @@
     </div>
 
     <footer class="sidebar-footer">
-      <p>{% if scrape_mode %}Maps Scraper{% else %}Google Places{% endif %} · Redfin · Scoring v1.0</p>
+      <p>Housing Boba Index · Scoring v2.0</p>
     </footer>
   </aside>
 

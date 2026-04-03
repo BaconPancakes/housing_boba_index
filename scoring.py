@@ -1,104 +1,84 @@
 """Housing Boba Index scoring engine.
 
-The index (0.00-1.00) quantifies how attractive an address is based on nearby
-premium boba shops.  The formula considers:
+Four-tier prestige model:
 
-1. **Shop quality** -- Google rating normalised to 0-1.
-2. **Review confidence** -- a log-scaled factor so highly-reviewed shops carry
-   more weight, but diminishing returns kick in after ~500 reviews.
-3. **Brand premium** -- multiplier for recognised top-tier Asian boba brands
-   (Molly Tea, Teazzi, Formosa Aroma, etc.).
-4. **Distance decay** -- shops closer to the address contribute exponentially
-   more (Gaussian decay with sigma = 0.8 mi).
-5. **Density bonus** -- having many shops nearby adds an extra kick, capped to
-   avoid runaway scores in hyper-dense areas.
+1. **Premium** — hand-labeled top-tier brands (highest weight).
+2. **Curated** — hand-labeled notable shops (medium weight).
+3. **Default** — all other shops (base weight).
+4. **Blacklisted** — hand-labeled exclusions (zero contribution).
 
-The raw aggregate is passed through a sigmoid to produce a smooth 0.00-1.00 score.
+Each non-blacklisted shop contributes ``tier_weight / (1 + distance_miles)``.
+The raw sum is normalized to 0.00-1.00 via a sigmoid calibrated against
+the observed score distribution across Bay Area zip codes.
 """
 
 from __future__ import annotations
 
 import math
 
-from config import MAX_INDEX_SCORE, PREMIUM_BRANDS
+from config import (
+    BLACKLISTED_SHOPS,
+    CURATED_BRANDS,
+    PREMIUM_BRANDS,
+    WEIGHT_CURATED,
+    WEIGHT_DEFAULT,
+    WEIGHT_PREMIUM,
+)
 from models import IndexResult, ShopData, ShopScore
 
-DISTANCE_SIGMA: float = 1.2
-REVIEW_LOG_BASE: int = 500
-DENSITY_BONUS_CAP: float = 15.0
-SIGMOID_MIDPOINT: float = 80.0
-SIGMOID_STEEPNESS: float = 0.04
-MIN_RATING: float = 3.5  # shops below this rating contribute nothing to the index
+
+def _classify_tier(name: str) -> tuple[str, float]:
+    """Return ``(tier_name, weight)`` for a shop name.
+
+    Resolution order: blacklisted > premium > curated > default.
+    """
+    lower = name.lower().strip()
+    if any(kw in lower for kw in BLACKLISTED_SHOPS):
+        return ("blacklisted", 0.0)
+    if any(kw in lower for kw in PREMIUM_BRANDS):
+        return ("premium", WEIGHT_PREMIUM)
+    if any(kw in lower for kw in CURATED_BRANDS):
+        return ("curated", WEIGHT_CURATED)
+    return ("default", WEIGHT_DEFAULT)
 
 
 def is_premium_brand(name: str) -> bool:
-    """Check whether a shop name matches any known premium brand.
-
-    Args:
-        name: Shop name to check (case-insensitive substring match).
-
-    Returns:
-        ``True`` if the name contains a recognised premium brand.
-    """
+    """Check whether a shop name matches any known premium brand."""
     lower = name.lower().strip()
     return any(brand in lower for brand in PREMIUM_BRANDS)
 
 
-def _brand_multiplier(name: str) -> float:
+def is_curated_brand(name: str) -> bool:
+    """Check whether a shop name matches any curated brand."""
     lower = name.lower().strip()
-    for brand, mult in PREMIUM_BRANDS.items():
-        if brand in lower:
-            return mult
-    return 1.0
+    return any(brand in lower for brand in CURATED_BRANDS)
 
 
-def _distance_weight(distance_miles: float) -> float:
-    return math.exp(-0.5 * (distance_miles / DISTANCE_SIGMA) ** 2)
-
-
-def _review_confidence(review_count: int) -> float:
-    if review_count <= 0:
-        return 0.1
-    return min(1.4, math.log1p(review_count) / math.log1p(REVIEW_LOG_BASE))
-
-
-def _sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-SIGMOID_STEEPNESS * (x - SIGMOID_MIDPOINT)))
+def is_blacklisted(name: str) -> bool:
+    """Check whether a shop name matches the blacklist."""
+    lower = name.lower().strip()
+    return any(kw in lower for kw in BLACKLISTED_SHOPS)
 
 
 def score_shop(shop: ShopData, distance_miles: float) -> ShopScore:
     """Score an individual boba shop relative to a target address.
 
     Args:
-        shop: Shop record with at least ``name``, ``rating``, and
-            ``review_count`` fields.
+        shop: Shop record with at least a ``name`` field.
         distance_miles: Distance from the target address in miles.
 
     Returns:
         Per-shop scoring breakdown including raw contribution.
     """
-    rating = float(shop.get("rating", 0) or 0)
-    review_count = int(shop.get("review_count", 0) or 0)
-
-    quality = rating / 5.0
-    confidence = _review_confidence(review_count)
-    brand_mult = _brand_multiplier(shop.get("name", ""))
-    dist_w = _distance_weight(distance_miles)
-
-    # Shops below MIN_RATING contribute nothing — their presence should not
-    # inflate the index.
-    raw = 0.0 if rating < MIN_RATING else quality * confidence * brand_mult * dist_w * 10.0
+    tier, weight = _classify_tier(shop.get("name", ""))
+    raw = 0.0 if tier == "blacklisted" else weight / (1.0 + distance_miles)
 
     return {
         "shop_id": shop.get("id", ""),
         "name": shop.get("name", ""),
-        "rating": round(rating, 2),
-        "review_count": review_count,
-        "brand_multiplier": brand_mult,
+        "tier": tier,
+        "tier_weight": weight,
         "distance_miles": round(distance_miles, 2),
-        "distance_weight": round(dist_w, 4),
-        "quality": round(quality, 4),
-        "confidence": round(confidence, 4),
         "raw_contribution": round(raw, 4),
     }
 
@@ -131,59 +111,61 @@ def compute_index(shops_with_distance: list[ShopData]) -> IndexResult:
         raw_total += detail["raw_contribution"]
         breakdown.append(detail)
 
-    # Only shops that actually contribute count toward density.
-    contributing = sum(1 for d in breakdown if d["raw_contribution"] > 0)
     shop_count = len(breakdown)
-    density_bonus = min(DENSITY_BONUS_CAP, contributing * 1.2)
-    raw_total += density_bonus
-
-    index_val = round(_sigmoid(raw_total) * MAX_INDEX_SCORE, 2)
-    index_val = min(MAX_INDEX_SCORE, max(0.0, index_val))
-
+    index_val = round(_normalize(raw_total), 2)
     grade = _grade(index_val)
 
     breakdown.sort(key=lambda d: d["raw_contribution"], reverse=True)
 
-    top_brand: str | None = None
+    top_premium: str | None = None
     for b in breakdown:
-        if b["brand_multiplier"] > 1.0:
-            top_brand = b["name"]
+        if b["tier"] == "premium":
+            top_premium = b["name"]
             break
 
     summary_parts = [f"{shop_count} boba shop{'s' if shop_count != 1 else ''} within range."]
-    if top_brand:
-        premium_count = sum(1 for b in breakdown if b["brand_multiplier"] > 1.0)
+    premium_count = sum(1 for b in breakdown if b["tier"] == "premium")
+    if top_premium:
         summary_parts.append(
             f"{premium_count} premium brand{'s' if premium_count != 1 else ''}"
-            f" detected (e.g. {top_brand})."
+            f" detected (e.g. {top_premium})."
         )
     if breakdown:
         best = breakdown[0]
         summary_parts.append(
             f"Top contributor: {best['name']}"
-            f" ({best['rating']}\u2605, {best['distance_miles']} mi)."
+            f" ({best['tier']}, {best['distance_miles']} mi)."
         )
 
     return {
         "index": index_val,
         "grade": grade,
         "shop_count": shop_count,
-        "density_bonus": round(density_bonus, 2),
         "raw_total": round(raw_total, 2),
         "breakdown": breakdown,
         "summary": " ".join(summary_parts),
     }
 
 
+# Sigmoid calibrated on 62 Bay Area zip centroids (raw range ~2-35, median ~12).
+_SIGMOID_MIDPOINT = 12.0
+_SIGMOID_K = 0.15
+
+
+def _normalize(raw: float) -> float:
+    """Map a raw score to 0.00-1.00 via sigmoid."""
+    return 1.0 / (1.0 + math.exp(-_SIGMOID_K * (raw - _SIGMOID_MIDPOINT)))
+
+
 def _grade(index: float) -> str:
     if index >= 0.90:  # noqa: PLR2004
         return "S"
-    if index >= 0.80:  # noqa: PLR2004
+    if index >= 0.75:  # noqa: PLR2004
         return "A"
-    if index >= 0.65:  # noqa: PLR2004
+    if index >= 0.60:  # noqa: PLR2004
         return "B"
-    if index >= 0.50:  # noqa: PLR2004
+    if index >= 0.40:  # noqa: PLR2004
         return "C"
-    if index >= 0.30:  # noqa: PLR2004
+    if index >= 0.20:  # noqa: PLR2004
         return "D"
     return "F"

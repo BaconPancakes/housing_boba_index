@@ -319,8 +319,6 @@ def _parse_one(wrapper: list[Any]) -> ShopData | None:
             "name": name,
             "lat": lat,
             "lng": lng,
-            "rating": _rating(biz),
-            "review_count": _reviews(biz),
             "address": _s(biz, _IDX_ADDRESS) or "",
             "categories": _categories(biz),
         }
