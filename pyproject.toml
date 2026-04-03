@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv>=1.1",
     "geopy>=2.4",
     "redfin>=0.1.1",
+    "gunicorn>=25.3.0",
 ]
 
 [tool.uv]

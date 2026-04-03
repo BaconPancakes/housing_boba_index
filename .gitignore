@@ -6,3 +6,7 @@ __pycache__/
 cache.db
 cache.db-wal
 cache.db-shm
+*.db-wal
+*.db-shm
+gha-deploy-key.json
+key.json
